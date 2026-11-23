@@ -464,6 +464,7 @@ const INTRO_D=5.6;
 let TIME=QS.get('t')!==null?(parseFloat(QS.get('t'))||0):-INTRO_D;
 const FREEZE=QS.get('freeze')==='1';
 window.BQ={time:()=>TIME};
+let READY=false; window.__bqReady=()=>{READY=true;};
 if(QS.get('yaw')!==null) yaw=parseFloat(QS.get('yaw'));
 if(QS.get('pitch')!==null) pitch=parseFloat(QS.get('pitch'));
 // отладка: ?dbg=1 даёт window.zoomTo(x,y,w,h) — увеличенный кадр области холста (доли 0..1)
@@ -491,7 +492,7 @@ function adapt(dt){
 let last=performance.now();
 function frame(now){
   const __t0=performance.now();
-  const dt=FREEZE?0:Math.min(0.05,(now-last)/1000); last=now;
+  const dt=(FREEZE||!READY)?0:Math.min(0.25,(now-last)/1000); last=now;
   TIME+=dt; idleT+=dt;
   if(!FREEZE) adapt(dt);
   if(ptrs.size===0){
@@ -551,7 +552,7 @@ const INTRO=5.6, ASP=1.85, END=6.4;
 const cvT=document.createElement('canvas');
 cvT.style.cssText='position:fixed;left:0;top:0;width:100vw;height:100vh;pointer-events:none;z-index:5';
 document.body.appendChild(cvT); const g=cvT.getContext('2d');
-let dpr=1,W=0,H=0,cwT=4,chT=7,fsT=7,colsT=0,rowsT=0,rMin=0,rMax=1,cells=[];
+let layer=null,dpr=1,W=0,H=0,cwT=4,chT=7,fsT=7,colsT=0,rowsT=0,rMin=0,rMax=1,cells=[];
 const clamp=(x,a,b)=>x<a?a:x>b?b:x;
 const hash=(a,b)=>{let h=(Math.imul(a|0,374761393)+Math.imul(b|0,668265263))|0;h=Math.imul(h^(h>>>13),1274126177);return((h^(h>>>16))>>>0)/4294967296;};
 const hex=h=>[parseInt(h.slice(1,3),16),parseInt(h.slice(3,5),16),parseInt(h.slice(5,7),16)];
@@ -588,47 +589,58 @@ function build(){
   let cMin=1e9,cMax=-1e9; for(const q of cells){ if(q.c<cMin)cMin=q.c; if(q.c>cMax)cMax=q.c; }
   for(const q of cells){
     const t=(q.c-cMin)/Math.max(1,cMax-cMin);
-    q.col=grad(t,q.edge?1.1:0.9+0.1*hash(q.c*3,q.r*5));
+    q.col=grad(t,q.edge?1.1:0.95);
   }
+  // вся надпись один раз рисуется в отдельный слой — дальше она проявляется одним вызовом drawImage
+  layer=document.createElement('canvas'); layer.width=cvT.width; layer.height=cvT.height;
+  const lg=layer.getContext('2d'); lg.setTransform(dpr,0,0,dpr,0,0); lg.font='bold '+fsT+'px '+FONT; lg.textBaseline='top';
+  for(const q of cells){ lg.fillStyle=q.col; lg.fillText(q.ch,q.x,q.y); }
 }
 build(); addEventListener('resize',build);
-if(document.fonts&&document.fonts.load) document.fonts.load('100px Pacifico','Happy Anniversary').then(build).catch(()=>{});
+{ let fin=false; const go=()=>{ if(fin) return; fin=true; build(); if(window.__bqReady) window.__bqReady(); };
+  setTimeout(go,1800);
+  if(document.fonts&&document.fonts.load) document.fonts.load('100px Pacifico','Happy Anniversary').then(go,go); else go(); }
 
 
-// 4 — ИСКРЫ: искры по спирали слетаются в буквы; потом буквы рассыпаются искрами к месту, где вырастет букет
-const SP=['#FF9A56','#FFFFFF','#D162A4','#EF7627'];
-function anim(c,t,o){
-  const delay=c.rn2*1.3, dur=1.1+c.rn*0.65, u=clamp((t-delay)/dur,0,1), e=1-Math.pow(1-u,3);
-  const a0=c.rn*6.283, sx=W/2+Math.cos(a0)*W*0.62, sy=H*0.46+Math.sin(a0)*H*0.62;
-  const bx=W/2, by=H*0.6;
-  const dist=Math.hypot(c.x-bx,(c.y-by)*1.4)/Math.hypot(W/2,H/2);
-  const tD=4.2+dist*0.9+c.rn*0.3;
-  if(t<delay){ o.a=0; return; }
-  if(t<tD){
-    if(u<1){
-      o.x=sx+(c.x-sx)*e+Math.sin(u*Math.PI)*(c.rn2-0.5)*160; o.y=sy+(c.y-sy)*e-Math.sin(u*Math.PI)*60*c.rn;
-      o.a=0.35+0.65*u; o.ch='*'; o.col=SP[(c.rn*4)|0];
-    } else if(t-delay-dur<0.28){ o.col='#ffffff'; o.ch='@'; }
-    return;
-  }
-  const u2=clamp((t-tD)/1.3,0,1), e2=u2*u2*(3-2*u2);
-  o.x=c.x+(bx-c.x)*e2+Math.sin(u2*Math.PI)*(c.rn-0.5)*120; o.y=c.y+(by-c.y)*e2-Math.sin(u2*Math.PI)*50*c.rn2;
-  o.a=1-u2*u2; o.ch=u2<0.15?c.ch:'*'; o.col=u2<0.15?c.col:SP[(c.rn2*4)|0];
-}
-
-
+// 4 — ИСКРЫ: искры слетаются в буквы (рисуются квадратиками), потом проявляется готовый слой надписи;
+//     в конце слой гаснет, и искры разлетаются к месту, где вырастет букет
+const SPC=['#FF9A56','#FFFFFF','#D162A4','#EF7627','#FFFFFF'], BIN=[0.25,0.5,0.75,1];
+const buckets=[]; for(let i=0;i<SPC.length*4;i++) buckets.push([]);
+function add(ci,a,x,y){ buckets[ci*4+(a>0.75?3:a>0.5?2:a>0.25?1:0)].push(x,y); }
 function frame(){
   requestAnimationFrame(frame);
-  const tau=(window.BQ?window.BQ.time():0)+INTRO;
-  g.setTransform(dpr,0,0,dpr,0,0); g.clearRect(0,0,W,H);
-  if(tau<0||tau>END) return;
-  const o={a:1,x:0,y:0,ch:'8',col:'#fff'};
-  g.font='bold '+fsT+'px '+FONT; g.textBaseline='top';
-  for(const c of cells){
-    o.a=1; o.x=c.x; o.y=c.y; o.ch=c.ch; o.col=c.col;
-    anim(c,tau,o);
-    if(o.a<=0.02) continue;
-    g.globalAlpha=o.a>1?1:o.a; g.fillStyle=o.col; g.fillText(o.ch,o.x,o.y);
+  const t=(window.BQ?window.BQ.time():0)+INTRO;
+  g.setTransform(1,0,0,1,0,0); g.clearRect(0,0,cvT.width,cvT.height);
+  if(t<0||t>END||!layer) return;
+  // слой с надписью: проявляется 2.0–2.9 с, гаснет 4.2–4.7 с
+  const la=clamp((t-2.0)/0.9,0,1)*(t<4.2?1:clamp(1-(t-4.2)/0.5,0,1));
+  if(la>0.01){ g.globalAlpha=la; g.drawImage(layer,0,0); g.globalAlpha=1; }
+  const bx=W/2, by=H*0.6, hw=Math.hypot(W/2,H/2);
+  for(let i=0;i<cells.length;i++){
+    const c=cells[i];
+    const delay=c.rn2*1.3, dur=1.1+c.rn*0.65;
+    let x,y,a,ci=(c.rn*4)|0;
+    if(t<4.2){
+      if(t<delay) continue;
+      const u=clamp((t-delay)/dur,0,1);
+      if(u<1){
+        const e=1-Math.pow(1-u,3), a0=c.rn*6.283, sx=W/2+Math.cos(a0)*W*0.62, sy=H*0.46+Math.sin(a0)*H*0.62;
+        x=sx+(c.x-sx)*e+Math.sin(u*Math.PI)*(c.rn2-0.5)*160; y=sy+(c.y-sy)*e-Math.sin(u*Math.PI)*60*c.rn; a=0.35+0.65*u;
+      } else { x=c.x; y=c.y; a=1-la; if(t-delay-dur<0.28){ ci=4; a=1; } }
+    } else {
+      const dist=Math.hypot(c.x-bx,(c.y-by)*1.4)/hw, tD=4.2+dist*0.9+c.rn*0.3;
+      if(t<tD){ x=c.x; y=c.y; a=clamp((t-4.2)/0.4,0,1)*0.9; }
+      else { const u2=clamp((t-tD)/1.3,0,1), e2=u2*u2*(3-2*u2);
+        x=c.x+(bx-c.x)*e2+Math.sin(u2*Math.PI)*(c.rn-0.5)*120; y=c.y+(by-c.y)*e2-Math.sin(u2*Math.PI)*50*c.rn2; a=1-u2*u2; }
+    }
+    if(a>0.05) add(ci,a,x,y);
+  }
+  const sz=Math.max(1.6,cwT*dpr*0.55), off=cwT*dpr*0.2;
+  for(let b=0;b<buckets.length;b++){
+    const arr=buckets[b]; if(!arr.length) continue;
+    g.fillStyle=SPC[b>>2]; g.globalAlpha=BIN[b&3];
+    for(let k=0;k<arr.length;k+=2) g.fillRect(arr[k]*dpr+off, arr[k+1]*dpr+off, sz, sz);
+    arr.length=0;
   }
   g.globalAlpha=1;
 }
