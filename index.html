@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Цифровой букет</title>
+<title>масюсе</title>
 <style>
   html,body{margin:0;height:100%;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none}
   body{background:#000}
@@ -22,7 +22,6 @@
 <body>
 <canvas id="c"></canvas>
 <div id="cap" style="display:none"><h1 id="t"></h1><p id="s"></p></div>
-<button id="replay" type="button">↻ заново</button>
 
 <script>
 (()=>{
@@ -479,7 +478,7 @@ if(QS.get('dbg')==='1') window.zoomTo=(fx,fy,fw,fh)=>{
   const sw=fw*cv.width, sh=fh*cv.height; z.width=1400; z.height=Math.round(1400*sh/sw);
   z.getContext('2d').drawImage(cv,fx*cv.width,fy*cv.height,sw,sh,0,0,z.width,z.height);
 };
-$('replay').addEventListener('click',()=>{TIME=-INTRO_D;});
+{ const rb=$('replay'); if(rb) rb.addEventListener('click',()=>{TIME=-INTRO_D;}); }
 
 /* ---------- автокачество: если кадры долгие — символы крупнее, если быстро — мельче ---------- */
 let adAcc=0, adN=0, adCool=0;
